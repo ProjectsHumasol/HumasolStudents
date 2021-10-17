@@ -13,6 +13,7 @@
 % retrieved from the timeseries using the SolarAnalyzer class. The input
 % data should be modified according to your project location. Extensive
 % documentation for all functions is present in the SolarAnalyzer class
+% More information can be found in the ReadMe file on GitHub
 close all
 clear all
 clc

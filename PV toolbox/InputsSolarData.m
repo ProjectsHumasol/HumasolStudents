@@ -27,10 +27,10 @@ temperatureCoefficient = -0.05;
 panelTemperatureFactor = 1.2;
 installedPeakPower = 4; %! in kWp
 nrMonths = 24;
-goodDayThreshold = 8000;
-relRiskThreshold = 6000; 
-midRiskThreshold = 4000; 
-highRiskThreshold = 2000;
+goodDayThreshold = 10;
+relRiskThreshold = 8; 
+midRiskThreshold = 4; 
+highRiskThreshold = 2;
 
 %% Save Variables
 save SolarDataInputs.mat panelTiltAngle DHI DNI GHI zenith azimuth temperature PTM timeInterval ...

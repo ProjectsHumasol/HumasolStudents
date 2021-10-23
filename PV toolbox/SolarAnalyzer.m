@@ -686,7 +686,6 @@ classdef SolarAnalyzer
             %   PTM: number of measurements per hour, determined by the
             %       selected solcast file
             
-            timeRes = 60/PTM;
             black_out_time = 0;
             battery = zeros(size(pvProfileRes));
             black_outs = [];
@@ -697,9 +696,14 @@ classdef SolarAnalyzer
             N = size(consumption, 1);
             
             for i = 2:size(pvProfileRes)
-                battery(i) = min(battery(i-1) + 100*(pvProfileRes(i)/PTM*1000 ...
-                    * batteryEfficiency/100 - consumption(mod(i-1, N)+1) ...
-                    / batteryEfficiency*100 / PTM)/ batteryCapacity, 100);
+                add = 100*(pvProfileRes(i)/PTM*1000 - consumption(mod(i-1, N)+1) ...
+                    / PTM)/ batteryCapacity;
+                if add > 0
+                    add = add*batteryEfficiency/100;
+                else
+                    add = add/batteryEfficiency*100;
+                end
+                battery(i) = min(battery(i-1) + add, 100);
                  
                 if (battery(i) < minimalBatteryCharge) % Black-out occurs
                     battery(i) = minimalBatteryCharge;

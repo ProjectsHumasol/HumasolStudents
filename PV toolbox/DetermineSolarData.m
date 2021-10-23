@@ -56,6 +56,8 @@ SolarData.PVefficiency = SolarAnalyzer.pvPanelEfficiency(PVbaseEfficiency, optim
                         installedPeakPower,nrMonths, goodDayThreshold, relRiskThreshold, midRiskThreshold,...
                             highRiskThreshold,timeRes);
 
+
+
 % Compute averages, minima and maxima over the whole timeseries 
 % This returns the minimal/maximal/average solar production (for a whole day and
 % a profile for the minimal day)
@@ -67,12 +69,53 @@ SolarData.PVefficiency = SolarAnalyzer.pvPanelEfficiency(PVbaseEfficiency, optim
                                     
 [SolarData.maxProfile, SolarData.maxDay] = SolarAnalyzer.maxDailyPV(...
                                         SolarData.pvProfile, 60, nrMaxDays);
-                                    
-                                    
+
 % Plot profiles for the minimal, average and maximal irradiation over the
 % considered period
 SolarAnalyzer.plot(SolarData.minProfile,SolarData.avProfile,SolarData.maxProfile,"2015-2016",60)
 % Plot a histogram showing the distribution of PV production over the year
 SolarAnalyzer.computePVHistogram(SolarData.pvProfile,installedPeakPower)
+
+if readConsumption 
+    % This will only be executed if you change readConsumption
+    % to true in the InputsSolarData file.
+    % You need an excel file with the consumption data.
+    
+    % Calculates the battery profile, the time indices giving black-outs
+    % and the total black-out time for a specific peakPower and battery
+    % capacity.
+    [battery, black_outs, black_out_time] = SolarAnalyzer.simulateBattery(...
+    	batteryCapacity, batteryEfficiency, minimal_battery_charge, SolarData.pvProfileRes, ...
+        consumption, PTM);
+
+    % Calculates the pareto boundary (every combination of battery
+    % capacity and peak power that is not dominated by cost, amount of
+    % black-outs and black-out time (the last two criteria are very
+    % similar, but not exactly the same).
+    pareto = SolarAnalyzer.bestCombos(SolarData.pvProfileRes, installedPeakPower, ...
+        minPeakPower, maxPeakPower, peakPowerStep, minBatteryCap, ...
+        maxBatteryCap, batteryCapStep, batteryEfficiency, minimal_battery_charge, ...
+        consumption, PTM, cost);
+    
+    % Plot battery in certain period
+    SolarAnalyzer.plotBattery(battery, '1-mar-2015', '31-mar-2015', '1-jan-2015', PTM)
+    % Plot pareto combo (for black-out time, not for total amount of
+    % black-outs)
+    SolarAnalyzer.plotPareto(pareto)
+   
+    if optimizeOrientation
+        % This calculates the pareto boundary while optimizing panel
+        % orientation (how many panels south, east and west).
+        paretoVariableRotationAngle = SolarAnalyzer.bestCombosVariableRotationAngle(...
+            minPeakPower, maxPeakPower, peakPowerStep, minBatteryCap, ...
+            maxBatteryCap, batteryCapStep, batteryEfficiency, minimal_battery_charge, ...
+            consumption, PTM, cost, GHI, DHI, DNI, azimuth, zenith, ...
+            panelTiltAngle, 0.1, timeInterval, installedPeakPower,nrMonths, ...
+            goodDayThreshold, relRiskThreshold, midRiskThreshold,...
+            highRiskThreshold,timeRes);
+    
+        SolarAnalyzer.plotPareto(paretoVariableRotationAngle)
+    end
+end
 
 save("SolarDataExample.mat","SolarData")

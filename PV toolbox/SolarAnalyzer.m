@@ -154,6 +154,10 @@ classdef SolarAnalyzer
                         cosd(sunAltitude(i)) * cosd(panelRotationAngle - azimuth(i)) + ...
                         cosd(panelTiltAngle) * sind(sunAltitude(i)));
                     
+                    if dirIrradiation(i) < 0
+                        dirIrradiation(i) = 0;
+                    end
+                    
                     groundIrradiation(i) = GHI(i) * alpha * (1 - SVF);
                     
                     difIrradiation(i) = DHI(i) * SVF;
@@ -654,17 +658,262 @@ classdef SolarAnalyzer
             %                   same maximum dimension and the same
             %                   minimum dimension, false otherwise.
             
-            bool = 1;
+            bool = true;
             if ~isempty(varargin)
                 x = max(size(varargin{1}));
                 y = min(size(varargin{1}));
                 for k = 1:length(varargin)
                     if ~(max(size(varargin{k})) == x && min(size(varargin{k})) == y)
-                        bool = 0;
+                        bool = false;
                         break;
                     end
                 end
             end
+        end
+        
+        function [battery, black_outs, black_out_time] = simulateBattery(...
+                batteryCapacity, batteryEfficiency, minimalBatteryCharge, pvProfileRes, ...
+                consumption, PTM)
+            % Returns the battery profile (battery), the indices of the
+            % black-outs (black_outs) and the total black-out time
+            % (black_out_time).
+            %   batteryCapacity: the capacity of the battery pack [Wh]
+            %   minimalBatteryCharge: the minimal battery charge that 
+            %       should be maintained to ensure a large lifespan of the
+            %       battery [in %]
+            %   pvProfileRes: pvProfile calculated above
+            %   consumption: the consumption data [W]
+            %   PTM: number of measurements per hour, determined by the
+            %       selected solcast file
+            
+            black_out_time = 0;
+            battery = zeros(size(pvProfileRes));
+            black_outs = [];
+            battery(1) = min(100 + batteryEfficiency*(pvProfileRes(1)/PTM*1000 ...
+                * batteryEfficiency/100 - consumption(1) / batteryEfficiency*100 ...
+                / PTM)/ batteryCapacity, 100);
+            blacked_out = false;
+            N = size(consumption, 1);
+            
+            for i = 2:size(pvProfileRes)
+                add = 100*(pvProfileRes(i)/PTM*1000 - consumption(mod(i-1, N)+1) ...
+                    / PTM)/ batteryCapacity;
+                if add > 0
+                    add = add*batteryEfficiency/100;
+                else
+                    add = add/batteryEfficiency*100;
+                end
+                battery(i) = min(battery(i-1) + add, 100);
+                 
+                if (battery(i) < minimalBatteryCharge) % Black-out occurs
+                    battery(i) = minimalBatteryCharge;
+                    black_out_time = black_out_time + 1 / PTM;
+                    if (~blacked_out)
+                        black_outs = [black_outs; i];
+                        blacked_out = true;
+                    end
+                else
+                    blacked_out = false;
+                end
+            end
+        end
+        
+        
+        function pareto = bestCombos(pvProfileResStandard, standardPeakPower, ...
+            minPeakPower, maxPeakPower, peakPowerStep, minBatteryCap, ...
+            maxBatteryCap, batteryCapStep, batteryEfficiency, minimalBatteryCharge, ...
+            consumption, PTM, costs)
+        % Calculates the best possible of combination (the pareto boundary
+        % of PV and batteries.
+        %   pvProfileResStandard: pvProfile calculated for standardPeakPower
+        %   standardPeakPower: reference peak power from wich
+        %       pvProfileResStandard has been calculated [kWp]
+        %   minPeakPower: the minimum peak power which will be used [kWp]
+        %   maxPeakPower: the maximum peak power which will be used [kWp]
+        %   peakPowerStep: the steps bewteen consecutive peak powers that
+        %       are used in the calculations (='the precision') [kWp]
+        %   minBatteryCap: the minimum battery capacity which will be used
+        %       [Wh]
+        %   maxBatteryCap: the maximum battery capacity which will be used
+        %       [Wh]
+        %   batteryCapStep: the steps bewteen consecutive battery 
+        %       capacities that are used in the calculations (='the 
+        %       precision') [Wh]
+        %   minimalBatteryCharge: the minimalBatteryCharge that should be
+        %       maintained to ensure a large lifespan of the battery [in %]
+        %   consumption: the consumption data [W]
+        %   PTM: number of measurements per hour, determined by the 
+        %       selected solcast file
+        %   costs: costs of PV and battery [€/kWp, €/Wh]
+        
+        pareto = [];
+        for peakPower = minPeakPower:peakPowerStep:maxPeakPower
+            pvProfileRes = pvProfileResStandard * (peakPower / standardPeakPower);
+            for batteryCap = minBatteryCap:batteryCapStep:maxBatteryCap
+                [~, black_outs, black_out_time] = SolarAnalyzer.simulateBattery(...
+                    batteryCap, batteryEfficiency, minimalBatteryCharge, pvProfileRes, ...
+                    consumption, PTM);
+                result = [peakPower, batteryCap, sum([peakPower; batteryCap].* costs), ...
+                    size(black_outs, 1), black_out_time];
+                pareto = SolarAnalyzer.updatePareto(pareto, result);
+            
+            end
+        end
+        
+        
+        end
+        
+        
+        function pareto = bestCombosVariableRotationAngle( ...
+            minPeakPower, maxPeakPower, peakPowerStep, minBatteryCap, ...
+            maxBatteryCap, batteryCapStep, batteryEfficiency, minimalBatteryCharge, ...
+            consumption, PTM, costs, GHI, DHI, DNI, azimuth, zenith, ...
+            panelTiltAngle, alpha, timeInterval, installedPeakPower,nrMonths, ...
+            goodDayThreshold, relRiskThreshold, midRiskThreshold,...
+            highRiskThreshold,timeRes)
+        % Calculates the best possible of combination (the pareto boundary
+        % of PV and batteries.
+        %   pvProfileResStandard: pvProfile calculated for standardPeakPower
+        %   standardPeakPower: reference peak power from wich
+        %       pvProfileResStandard has been calculated [kWp]
+        %   minPeakPower: the minimum peak power which will be used [kWp]
+        %   maxPeakPower: the maximum peak power which will be used [kWp]
+        %   peakPowerStep: the steps bewteen consecutive peak powers that
+        %       are used in the calculations (='the precision') [kWp]
+        %   minBatteryCap: the minimum battery capacity which will be used
+        %       [Wh]
+        %   maxBatteryCap: the maximum battery capacity which will be used
+        %       [Wh]
+        %   batteryCapStep: the steps bewteen consecutive battery 
+        %       capacities that are used in the calculations (='the 
+        %       precision') [Wh]
+        %   minimalBatteryCharge: the minimalBatteryCharge that should be
+        %       maintained to ensure a large lifespan of the battery [in %]
+        %   consumption: the consumption data [W]
+        %   PTM: number of measurements per hour, determined by the 
+        %       selected solcast file
+        %   costs: costs of PV and battery [€/kWp, €/Wh]
+        RotationAngles = [-90, 180, 90];
+        totalIrradiation = [];
+        pvProfileResStandard = [];
+        for i = 1: size(RotationAngles, 2)
+            totalIrradiation(:, i) = SolarAnalyzer.irradiation(GHI, DHI, DNI, azimuth,...
+                            zenith, panelTiltAngle, alpha, RotationAngles(i));
+            [~, ~, pvProfileResStandard(:, i), ~, ~, ~, ~, ~, ~, ~, ~]...
+                        = SolarAnalyzer.computeSolarProfiles(totalIrradiation(:, i), timeInterval,...
+                        installedPeakPower,nrMonths, goodDayThreshold, relRiskThreshold, midRiskThreshold,...
+                            highRiskThreshold,timeRes);
+        end
+        pareto = [];
+        f = waitbar(0,'Calculating pareto boundary', 'CreateCancelBtn','setappdata(gcbf,''canceling'',1)');
+        for peakPower = minPeakPower:peakPowerStep:maxPeakPower
+            
+            for eastPower = 0:peakPowerStep:peakPower
+                for southPower = 0:peakPowerStep:peakPower-eastPower
+                    westPower = peakPower - eastPower - southPower;
+                    peakPowers = [eastPower, southPower, westPower];
+                    
+                    pvProfileRes = zeros(size(pvProfileResStandard, 1), 1);
+                    for j= 1:size(RotationAngles, 2)
+                        pvProfileRes = pvProfileRes + pvProfileResStandard(:, j) * (peakPowers(j) / installedPeakPower);
+                    end
+                    
+                    for batteryCap = minBatteryCap:batteryCapStep:maxBatteryCap
+                        [~, black_outs, black_out_time] = SolarAnalyzer.simulateBattery(...
+                            batteryCap, batteryEfficiency, minimalBatteryCharge, pvProfileRes, ...
+                            consumption, PTM);
+                        result = [peakPower, batteryCap, sum([peakPower; batteryCap].* costs), ...
+                            size(black_outs, 1), black_out_time, eastPower, southPower, westPower];
+                        pareto = SolarAnalyzer.updatePareto(pareto, result);
+                        
+                    end
+                    waitbar((peakPower-minPeakPower+(eastPower+southPower/...
+                        (peakPower-eastPower+0.001))/peakPower*peakPowerStep)...
+                        /(maxPeakPower-minPeakPower), f)
+                    if getappdata(f,'canceling')
+                        delete(f)
+                        return
+                    end
+                end
+            end
+        end
+        
+        %close(f)
+        delete(f)
+        end
+        
+        
+        function pareto = updatePareto(pareto, result)
+            % Updates the pareto boundary with the new result
+            N = size(pareto, 1);
+            add = true;
+            for i = 1:N
+                if (result(4) <= pareto(i, 4) & result(5) <= pareto(i, 5) & ...
+                    result(3) <= pareto(i, 3))
+                    pareto(i, :) = result;
+                    add = false;
+                    j = i + 1;
+                    while j <= N
+                        if (result(4) <= pareto(j, 4) & result(5) <= pareto(j, 5) & ...
+                            result(3) <= pareto(j, 3))
+                            pareto(j, :) = [];
+                            N = N - 1;
+                        end
+                        j = j + 1;
+                    end
+                    break
+                elseif (result(4) >= pareto(i, 4) & result(5) >= pareto(i, 5) & ...
+                    result(3) >= pareto(i, 3))
+                    add = false;
+                    break
+                end
+            end
+            if add
+                pareto = [pareto; result];
+            end
+        end
+        
+        function plotBattery(battery, start, finish, startOfData, PTM)
+            % Plots the battery percentage over a given timeframe
+            %   battery: batteryprofile calculated by simulateBattery
+            %       function above
+            %   start: first date from which should be plotted
+            %   finsih: last date from which should be plotted
+            %   startOfData: Date at which batteryprofile starts
+            
+            figure()
+            begin = datenum(datetime(start,'InputFormat','dd-MMM-yyyy'));
+            einde = datenum(datetime(finish,'InputFormat','dd-MMM-yyyy'))+1;
+            data_vanaf = datenum(datetime(startOfData,'InputFormat','dd-MMM-yyyy'));
+            t = (24*PTM*(begin - data_vanaf)+1:24*PTM*(einde-data_vanaf));
+            plot(datetime(t/(24*4)+data_vanaf,'ConvertFrom','datenum'), battery(t))
+            xtickformat('dd-MMM');
+            xlabel('Time');
+            ylabel('Battery percentage [%]')
+            title('Battery vs time')
+        end
+        
+        function plotPareto(pareto)
+            % Plots the pareto-border of black-out-time and cost.
+            % This only includes the cost of PV and batteries.
+            % Invertors etc. are not included.
+            %   pareto: pareto boundary calculated by bestCombos function above
+            
+            figure()
+            p = scatter(pareto(:, 3), pareto(:, 5));
+            dtt = p.DataTipTemplate;
+            dtt.DataTipRows(1).Label = 'Cost:';
+            dtt.DataTipRows(2).Label = 'Black-out time:';
+            dtt.DataTipRows(end+1) = dataTipTextRow('kWp:',pareto(:, 1));
+            dtt.DataTipRows(end+1) = dataTipTextRow('Wh:',pareto(:, 2));
+            if size(pareto, 2) > 5
+                dtt.DataTipRows(end+1) = dataTipTextRow('East (kWp):',pareto(:, 6));
+                dtt.DataTipRows(end+1) = dataTipTextRow('South (kWp):',pareto(:, 7));
+                dtt.DataTipRows(end+1) = dataTipTextRow('West (kWp):',pareto(:, 8));
+            end
+            xlabel('Cost [€]') 
+            ylabel('Total time of black-outs [hours]')
+            title('Pareto boundary')
         end
     end
 end

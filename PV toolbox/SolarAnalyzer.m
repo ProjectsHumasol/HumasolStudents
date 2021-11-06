@@ -374,7 +374,7 @@ classdef SolarAnalyzer
             end
             
             % Using these hourly averages compute total PV per day
-            days = zeros(nbS/(24*60),1);
+            days = zeros(round(nbS/(24*60)),1);
             for i = 1:nbS/(60*24)
                 day = 0;
                 for j=1:24
